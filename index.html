@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard WebGIS Kabupaten Luwu Timur</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="dash">
+
+    <!-- ================= HEADER ================= -->
+    <header class="topbar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11z"/>
+        <circle cx="12" cy="10" r="2.5"/>
+      </svg>
+      <div>
+        <h1>Dashboard WebGIS Kabupaten Luwu Timur</h1>
+        <p>Administrasi, penutupan lahan, jalan, dan sungai</p>
+      </div>
+    </header>
+
+    <main class="grid">
+
+      <!-- ================= KOLOM KIRI ================= -->
+      <section class="left">
+        <div class="panel panel--map">
+          <div id="map"></div>
+        </div>
+
+        <div class="bottom">
+          <article class="panel">
+            <h2>Profil wilayah</h2>
+            <div class="profile-text" id="profile-text">Menghitung data...</div>
+          </article>
+
+          <article class="panel">
+            <h2>Komposisi penutupan lahan</h2>
+            <div class="chart-box"><canvas id="chart-pie"></canvas></div>
+          </article>
+
+          <article class="panel">
+            <h2>Luas per kelas lahan (hektare, skala log)</h2>
+            <div class="chart-box"><canvas id="chart-bar"></canvas></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ================= KOLOM KANAN ================= -->
+      <section class="right">
+        <div class="kpis">
+          <article class="panel kpi">
+            <div class="label">Luas wilayah</div>
+            <div class="value"><span id="kpi-area">-</span><span class="unit">km²</span></div>
+          </article>
+          <article class="panel kpi">
+            <div class="label">Panjang jalan</div>
+            <div class="value"><span id="kpi-road">-</span><span class="unit">km</span></div>
+          </article>
+        </div>
+
+        <article class="panel">
+          <h2>Jaringan dan objek</h2>
+          <table class="tbl">
+            <thead><tr><th>Data</th><th>Nilai</th></tr></thead>
+            <tbody id="tbl-jaringan"></tbody>
+          </table>
+        </article>
+
+        <article class="panel">
+          <h2>Luas penutupan lahan</h2>
+          <div class="table-scroll">
+            <table class="tbl">
+              <thead><tr><th>Kelas</th><th>Luas (ha)</th><th>%</th></tr></thead>
+              <tbody id="tbl-lahan"></tbody>
+              <tfoot id="tfoot-lahan"></tfoot>
+            </table>
+          </div>
+        </article>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    /* ==========================================================
+       1. KONFIGURASI LAYER
+       - file  : path GeoJSON (EPSG:4326) di folder data/
+       - z     : urutan tumpukan (makin besar makin di atas)
+       - type  : 'admin' | 'polygon' | 'line'
+       - stat  : true = ikut dihitung di tabel/grafik penutupan lahan
+       Kalau nama file kamu beda, cukup ubah bagian `file`.
+       ========================================================== */
+    const LAYERS = [
+  { id: 'admin', name: 'Batas Administrasi', type: 'admin',
+    file: 'data/Administrasi_Lwu_Timur.geojson', color: '#ffffff', z: 460, visible: true },
+
+  { id: 'jalan', name: 'Jalan', type: 'line',
+    file: 'data/Jalan.geojson', color: '#ff3b30', weight: 1, z: 450, visible: true },
+
+  { id: 'sungai', name: 'Sungai', type: 'line',
+    file: 'data/Sungai.geojson', color: '#2f80ff', weight: 1.4, z: 440, visible: true },
+
+  { id: 'permukiman', name: 'Permukiman', type: 'polygon', stat: true,
+    file: 'data/Permukiman.geojson', color: '#ff6b6b', z: 430, visible: true },
+
+  { id: 'sawah', name: 'Sawah', type: 'polygon', stat: true,
+    file: 'data/Sawah.geojson', color: '#b6f23a', z: 420, visible: true },
+
+  { id: 'semak', name: 'Semak Belukar', type: 'polygon', stat: true,
+    file: 'data/Semak_Belukar.geojson', color: '#9acd32', z: 415, visible: true },
+
+  { id: 'perkebunan', name: 'Perkebunan', type: 'polygon', stat: true,
+    file: 'data/Perkebunan.geojson', color: '#c98a3f', z: 410, visible: true },
+
+  { id: 'danau', name: 'Danau', type: 'polygon', stat: true,
+    file: 'data/Danau.geojson', color: '#12a8ff', z: 405, visible: true },
+
+  { id: 'hutan', name: 'Hutan Tinggi', type: 'polygon', stat: true,
+    file: 'data/Hutan_Tinggi.geojson', color: '#1f9d3a', z: 402, visible: true },
+
+        // Penutupan lahan gabungan
+  { id: 'penutupan', name: 'Penutupan Lahan (gabungan)', type: 'polygon',
+    file: 'data/PENUTUPAN_LAHAN.geojson', color: '#8d8d8d', z: 401, visible: true,
+    classField: 'REMARK',
+    classColors: {
+      'Bendungan': '#cf8231',
+      'Danau/Situ': '#1f22d3',
+      'Empang': '#cbc81f',
+      'Gedung/Bangunan': '#db29c3',
+      'Hutan Bakau/Mangrove': '#cf7958',
+      'Hutan Rimba': '#a650d1',
+      'Padang Rumput': '#60adce',
+      'Pasir/Bukit Pasir Darat': '#ec3e5b',
+      'Pasir/Bukit Pasri Laut': '#6dd162',
+      'Pendidikan Anak Usia Dini': '#c86b66',
+      'Pendidikan Dasar': '#a9e45c',
+      'Pendidikan Keagamaan': '#bb29cb',
+      'Pendidikan Menengah Pertama': '#3a5fd0',
+      'Pendidikan Menengah Umum': '#5737c9',
+      'Perkebunan/Kebun': '#0eed94',
+      'Permukiman dan Tempat Kegiatan': '#d12268',
+      'Rawa': '#2edbbe',
+      'Sawah': '#4bcfd8',
+      'Swah Tadah Hujan': '#ea59b5',
+      'Semak Belukar': '#62e974',
+      'Sungai': '#57e68b',
+      'Tambak': '#78dc46',
+      'Tanah Kosong/Gundul': '#ccaa43',
+      'Tanaman Campur': '#7b3bca',
+      'Tegalan/Ladang': '#cbe469'
+    }
+  }
+];
+
+    const BASEMAPS = {
+      'Esri World Imagery': L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19, attribution: 'Tiles &copy; Esri' }),
+      'Google Satellite': L.tileLayer(
+        'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+        { maxZoom: 20, attribution: '&copy; Google' }),
+      'OpenStreetMap': L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' })
+    };
+
+    const DEFAULT_CENTER = [-2.55, 121.1];
+    const DEFAULT_ZOOM = 9;
+    const TITLE_FIELDS = ['NAMOBJ', 'NAMA', 'Nama', 'nama', 'NAME', 'REMARK', 'KETERANGAN', 'WADMKK'];
+
+    /* ==========================================================
+       2. HELPER
+       ========================================================== */
+    const $ = id => document.getElementById(id);
+    const fmt = (n, d = 0) =>
+      Number(n).toLocaleString('id-ID', { minimumFractionDigits: d, maximumFractionDigits: d });
+
+    function esc(v) {
+      return String(v).replace(/[&<>"']/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    /* ==========================================================
+       3. PETA
+       ========================================================== */
+    const map = L.map('map', {
+      zoomControl: false,
+      preferCanvas: true,
+      center: DEFAULT_CENTER,
+      zoom: DEFAULT_ZOOM,
+      maxZoom: 19
+    });
+
+    L.control.zoom({ position: 'topright' }).addTo(map);
+    L.control.scale({ position: 'bottomleft', imperial: false }).addTo(map);
+
+    let currentBase = BASEMAPS['Esri World Imagery'].addTo(map);
+
+    // Pane per layer supaya urutan tumpukan pasti
+    LAYERS.forEach(cfg => {
+      const pane = map.createPane('pane-' + cfg.id);
+      pane.style.zIndex = cfg.z;
+      if (cfg.type === 'admin') pane.style.pointerEvents = 'none';
+    });
+
+    // Peta ikut menyesuaikan saat ukuran panel berubah
+    new ResizeObserver(() => map.invalidateSize()).observe($('map'));
+
+    let adminBounds = null;
+    const groups = {};   // id -> L.GeoJSON
+    const stats = {};    // id -> { areaHa, lengthKm, count }
+
+    function fitToRegion() {
+      if (adminBounds && adminBounds.isValid()) {
+        map.fitBounds(adminBounds, { padding: [20, 20] });
+      } else {
+        map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+      }
+    }
+
+    /* ----- Tombol "zoom ke wilayah" ----- */
+    const homeControl = L.control({ position: 'topright' });
+    homeControl.onAdd = () => {
+      const div = L.DomUtil.create('div', 'leaflet-bar');
+      div.innerHTML = '<button type="button" class="map-btn" title="Zoom ke Luwu Timur" aria-label="Zoom ke Luwu Timur">&#8962;</button>';
+      L.DomEvent.disableClickPropagation(div);
+      div.querySelector('button').addEventListener('click', fitToRegion);
+      return div;
+    };
+    homeControl.addTo(map);
+
+    /* ----- Koordinat kursor ----- */
+    const coordsControl = L.control({ position: 'bottomright' });
+    coordsControl.onAdd = () => {
+      const div = L.DomUtil.create('div', 'coords');
+      div.textContent = 'Arahkan kursor ke peta';
+      return div;
+    };
+    coordsControl.addTo(map);
+    map.on('mousemove', e => {
+      document.querySelector('.coords').textContent =
+        e.latlng.lat.toFixed(5) + ', ' + e.latlng.lng.toFixed(5);
+    });
+
+    /* ----- Panel layer, legenda, transparansi, peta dasar ----- */
+    let polygonOpacity = 0.6;
+
+    function swatchHtml(cfg) {
+      if (cfg.type === 'admin') return '<span class="swatch swatch--outline"></span>';
+      if (cfg.type === 'line')  return `<span class="swatch swatch--line" style="color:${cfg.color}"></span>`;
+      return `<span class="swatch" style="background:${cfg.color}"></span>`;
+    }
+
+    const layerControl = L.control({ position: 'topleft' });
+    layerControl.onAdd = () => {
+      const div = L.DomUtil.create('div', 'layer-panel');
+      if (window.innerWidth < 760) div.classList.add('is-collapsed');
+      div.innerHTML = `
+        <button type="button" class="layer-panel__toggle" aria-expanded="true">
+          <span>Layer dan legenda</span><span class="chev">&#9662;</span>
+        </button>
+        <div class="layer-panel__body">
+          <ul class="layer-list" id="layer-list"></ul>
+          <h3>Transparansi penutupan lahan</h3>
+          <input type="range" id="opacity" min="0" max="100" value="60" aria-label="Transparansi penutupan lahan" />
+          <h3>Peta dasar</h3>
+          <select id="basemap" aria-label="Peta dasar"></select>
+        </div>`;
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+
+      const toggle = div.querySelector('.layer-panel__toggle');
+      toggle.addEventListener('click', () => {
+        const collapsed = div.classList.toggle('is-collapsed');
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+      });
+      return div;
+    };
+    layerControl.addTo(map);
+
+    const listEl = $('layer-list');
+    const itemEls = {};
+
+    LAYERS.forEach(cfg => {
+      const li = document.createElement('li');
+      li.className = 'layer-item';
+      li.innerHTML = `
+        <label>
+          <input type="checkbox" ${cfg.visible ? 'checked' : ''} disabled />
+          ${swatchHtml(cfg)}
+          <span class="name">${esc(cfg.name)}</span>
+          <span class="status">memuat...</span>
+        </label>`;
+      listEl.appendChild(li);
+      itemEls[cfg.id] = li;
+
+      li.querySelector('input').addEventListener('change', e => {
+        const g = groups[cfg.id];
+        if (!g) return;
+        e.target.checked ? g.addTo(map) : map.removeLayer(g);
+      });
+    });
+
+    function setStatus(id, text, isError) {
+      itemEls[id].querySelector('.status').textContent = text;
+      itemEls[id].classList.toggle('is-error', !!isError);
+    }
+
+    const baseSelect = $('basemap');
+    Object.keys(BASEMAPS).forEach(name => baseSelect.add(new Option(name, name)));
+    baseSelect.addEventListener('change', () => {
+      map.removeLayer(currentBase);
+      currentBase = BASEMAPS[baseSelect.value].addTo(map);
+    });
+
+    $('opacity').addEventListener('input', e => {
+      polygonOpacity = e.target.value / 100;
+      LAYERS.filter(c => c.type === 'polygon').forEach(cfg => {
+        if (groups[cfg.id]) groups[cfg.id].setStyle({ fillOpacity: polygonOpacity });
+      });
+    });
+
+       /* ==========================================================
+       4. STYLE & POPUP
+       ========================================================== */
+    function lineWeight(base, zoom) {
+      if (zoom <= 9)  return base * 0.5;
+      if (zoom <= 11) return base * 0.8;
+      if (zoom <= 13) return base * 1.4;
+      return base * 2.2;
+    }
+
+    // ===== FUNGSI WARNA KELAS =====
+    const classColorMap = {};   // id layer -> { namaKelas: warna }
+
+    function autoColor(i) {
+      const hue = (i * 137.508) % 360;
+      return 'hsl(' + hue.toFixed(0) + ', 65%, 55%)';
+    }
+
+    function classColor(cfg, props) {
+      const nilai = (props && props[cfg.classField] != null)
+        ? String(props[cfg.classField]).trim()
+        : 'Tanpa kelas';
+      const m = classColorMap[cfg.id] || (classColorMap[cfg.id] = {});
+      if (!m[nilai]) {
+        m[nilai] = (cfg.classColors && cfg.classColors[nilai])
+          || autoColor(Object.keys(m).length);
+      }
+      return m[nilai];
+    }
+    // ===== SELESAI =====
+
+    function styleFor(cfg, feature) {
+      if (cfg.type === 'admin') {
+        return { color: cfg.color, weight: 2, opacity: 1, fill: false, dashArray: '6 4' };
+      }
+      if (cfg.type === 'line') {
+        return { color: cfg.color, weight: lineWeight(cfg.weight, map.getZoom()), opacity: 0.9 };
+      }
+      const fill = (cfg.classField && feature) ? classColor(cfg, feature.properties) : cfg.color;
+      return {
+        color: '#ffffff', weight: 0.4, opacity: 0.5,
+        fillColor: fill, fillOpacity: polygonOpacity
+      };
+    }
+
+    map.on('zoomend', () => {
+      LAYERS.filter(c => c.type === 'line').forEach(cfg => {
+        if (groups[cfg.id]) groups[cfg.id].setStyle({ weight: lineWeight(cfg.weight, map.getZoom()) });
+      });
+    });
+
+        function popupHtml(cfg, props, feature) {
+      props = props || {};
+
+      // Judul: pakai kolom klasifikasi (REMARK) kalau ada
+      const titleKey = cfg.classField && props[cfg.classField]
+        ? cfg.classField
+        : TITLE_FIELDS.find(k => props[k]);
+      const title = titleKey ? props[titleKey] : cfg.name;
+
+      // Luas / panjang dihitung dari geometri
+      let extra = '';
+      try {
+        if (feature && cfg.type === 'polygon') {
+          const ha = turf.area(feature) / 10000;
+          extra = `<tr><td>Luas</td><td>${fmt(ha, 2)} ha</td></tr>`;
+        } else if (feature && cfg.type === 'line') {
+          const km = turf.length(feature, { units: 'kilometers' });
+          extra = `<tr><td>Panjang</td><td>${fmt(km, 2)} km</td></tr>`;
+        }
+      } catch (e) { /* abaikan geometri rusak */ }
+
+      const rows = Object.entries(props)
+        .filter(([, v]) => v !== null && v !== '' && v !== undefined)
+        .slice(0, 12)
+        .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`)
+        .join('');
+
+      return `<div class="popup">
+        <p class="popup__title">${esc(title)}</p>
+        <p class="popup__layer">${esc(cfg.name)}</p>
+        <table>${extra}${rows}</table>
+      </div>`;
+    }
+
+    /* ==========================================================
+       5. MUAT DATA + HITUNG STATISTIK
+       ========================================================== */
+    function computeStats(cfg, features) {
+      let areaM2 = 0, lengthKm = 0;
+      features.forEach(f => {
+        if (!f || !f.geometry) return;
+        try {
+          if (cfg.type === 'polygon' || cfg.type === 'admin') areaM2 += turf.area(f);
+          else if (cfg.type === 'line') lengthKm += turf.length(f, { units: 'kilometers' });
+        } catch (e) { /* abaikan geometri rusak */ }
+      });
+      return { areaHa: areaM2 / 10000, areaKm2: areaM2 / 1e6, lengthKm, count: features.length };
+    }
+
+    async function loadLayer(cfg) {
+      try {
+        const res = await fetch(cfg.file);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+
+        const group = L.geoJSON(data, {
+          pane: 'pane-' + cfg.id,
+                    style: feature => styleFor(cfg, feature),
+          onEachFeature: (feature, layer) => {
+            if (cfg.type === 'admin') return;
+            layer.bindPopup(() => popupHtml(cfg, feature.properties, feature), { maxWidth: 320 });
+            if (cfg.type === 'polygon') {
+              layer.on('mouseover', () => layer.setStyle({ weight: 2, opacity: 1 }));
+              layer.on('mouseout',  () => group.resetStyle(layer));
+            }
+          }
+        });
+
+        groups[cfg.id] = group;
+        if (cfg.visible) group.addTo(map);
+        if (cfg.id === 'admin') adminBounds = group.getBounds();
+
+        stats[cfg.id] = computeStats(cfg, data.features || []);
+
+        itemEls[cfg.id].querySelector('input').disabled = false;
+        setStatus(cfg.id, '');
+      } catch (err) {
+        console.error('Gagal memuat', cfg.file, err);
+        setStatus(cfg.id, 'file tidak ditemukan', true);
+      }
+    }
+
+    /* ==========================================================
+       6. DASHBOARD (KPI, TABEL, GRAFIK, PROFIL)
+       ========================================================== */
+    Chart.defaults.color = '#e6e6e6';
+    Chart.defaults.borderColor = '#4a4a4a';
+    Chart.defaults.font.family = '"Segoe UI", system-ui, sans-serif';
+
+    function zoomToLayer(id) {
+      const g = groups[id];
+      if (g) map.fitBounds(g.getBounds(), { padding: [20, 20] });
+    }
+
+    function renderDashboard() {
+      const adminKm2 = stats.admin ? stats.admin.areaKm2 : null;
+      const roadKm   = stats.jalan ? stats.jalan.lengthKm : null;
+      const riverKm  = stats.sungai ? stats.sungai.lengthKm : null;
+
+      // KPI
+      $('kpi-area').textContent = adminKm2 !== null ? fmt(adminKm2, 0) : '-';
+      $('kpi-road').textContent = roadKm !== null ? fmt(roadKm, 0) : '-';
+
+      // Tabel jaringan & objek
+      const rowsJar = [
+        ['Panjang jalan',  roadKm  !== null ? fmt(roadKm, 1) + ' km' : '-'],
+        ['Panjang sungai', riverKm !== null ? fmt(riverKm, 1) + ' km' : '-'],
+        ['Poligon permukiman', stats.permukiman ? fmt(stats.permukiman.count) : '-'],
+        ['Poligon danau',      stats.danau ? fmt(stats.danau.count) : '-']
+      ];
+      $('tbl-jaringan').innerHTML = rowsJar
+        .map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('');
+
+      // Tabel & grafik penutupan lahan
+      const classes = LAYERS
+        .filter(c => c.stat && stats[c.id])
+        .map(c => ({ id: c.id, name: c.name, color: c.color, ha: stats[c.id].areaHa }))
+        .sort((a, b) => b.ha - a.ha);
+
+      const totalHa = classes.reduce((s, c) => s + c.ha, 0);
+
+      if (!classes.length) {
+        $('tbl-lahan').innerHTML = '<tr><td colspan="3" class="muted">Belum ada data penutupan lahan yang termuat.</td></tr>';
+        $('profile-text').innerHTML = '<p>Data belum termuat. Pastikan file GeoJSON ada di folder <b>data/</b> dan halaman dibuka lewat Live Server.</p>';
+        return;
+      }
+
+      $('tbl-lahan').innerHTML = classes.map(c => `
+        <tr class="is-link" data-id="${c.id}" title="Klik untuk zoom ke layer">
+          <td><span class="dot" style="background:${c.color}"></span>${esc(c.name)}</td>
+          <td>${fmt(c.ha, 1)}</td>
+          <td>${fmt(c.ha / totalHa * 100, 1)}</td>
+        </tr>`).join('');
+      $('tfoot-lahan').innerHTML =
+        `<tr><td>Total</td><td>${fmt(totalHa, 1)}</td><td>100</td></tr>`;
+
+      document.querySelectorAll('#tbl-lahan tr.is-link').forEach(tr => {
+        tr.addEventListener('click', () => zoomToLayer(tr.dataset.id));
+      });
+
+      // Grafik pie
+      new Chart($('chart-pie'), {
+        type: 'pie',
+        data: {
+          labels: classes.map(c => c.name),
+          datasets: [{
+            data: classes.map(c => +c.ha.toFixed(2)),
+            backgroundColor: classes.map(c => c.color),
+            borderColor: '#2f2f2f', borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'right', labels: { boxWidth: 12 } },
+            tooltip: { callbacks: { label: ctx => ` ${fmt(ctx.parsed, 1)} ha` } }
+          }
+        }
+      });
+
+      // Grafik batang (skala log supaya kelas kecil tetap terlihat)
+      new Chart($('chart-bar'), {
+        type: 'bar',
+        data: {
+          labels: classes.map(c => c.name),
+          datasets: [{
+            data: classes.map(c => Math.max(+c.ha.toFixed(2), 0.01)),
+            backgroundColor: '#f5a623'
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ` ${fmt(ctx.parsed.x, 1)} ha` } }
+          },
+          scales: {
+            x: { type: 'logarithmic', ticks: { callback: v => fmt(v) } },
+            y: { grid: { display: false } }
+          }
+        }
+      });
+
+      // Teks profil (otomatis dari data)
+      const b = adminBounds && adminBounds.isValid() ? adminBounds : null;
+      const dir = (v, pos, neg) => fmt(Math.abs(v), 2) + '° ' + (v >= 0 ? pos : neg);
+      const parts = [];
+      parts.push(`<p>Kabupaten Luwu Timur${adminKm2 !== null
+        ? ` memiliki luas wilayah sekitar <b>${fmt(adminKm2, 0)} km²</b> berdasarkan data batas administrasi`
+        : ''}.</p>`);
+      if (b) {
+        parts.push(`<p>Wilayah ini berada di antara ${dir(b.getSouth(), 'LU', 'LS')} sampai ${dir(b.getNorth(), 'LU', 'LS')} dan ${dir(b.getWest(), 'BT', 'BB')} sampai ${dir(b.getEast(), 'BT', 'BB')}.</p>`);
+      }
+      const top = classes[0], second = classes[1];
+      parts.push(`<p>Dari ${classes.length} kelas penutupan lahan yang dimuat, <b>${esc(top.name)}</b> paling luas (${fmt(top.ha / totalHa * 100, 1)}%)${
+        second ? `, diikuti ${esc(second.name)} (${fmt(second.ha / totalHa * 100, 1)}%)` : ''}.</p>`);
+      if (roadKm !== null || riverKm !== null) {
+        parts.push(`<p>${roadKm !== null ? `Jaringan jalan sepanjang ${fmt(roadKm, 0)} km` : ''}${
+          roadKm !== null && riverKm !== null ? ' dan ' : ''}${
+          riverKm !== null ? `${roadKm === null ? 'Sungai' : 'sungai'} sepanjang ${fmt(riverKm, 0)} km` : ''}.</p>`);
+      }
+      $('profile-text').innerHTML = parts.join('');
+    }
+
+    /* ==========================================================
+       7. JALANKAN
+       ========================================================== */
+    Promise.all(LAYERS.map(loadLayer)).then(() => {
+      fitToRegion();
+      setTimeout(renderDashboard, 30);
+    });
+  </script>
+</body>
+</html>
